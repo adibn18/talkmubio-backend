@@ -65,27 +65,59 @@ await fastify.register(cors, {
  * Helper function to store an image from a URL into Firebase Storage
  * and return the public URL (assuming you make the file public).
  */
-async function storeImageInFirebase(openAIImageUrl) {
-  // Fetch the image from OpenAI's URL
-  const response = await fetch(openAIImageUrl);
-  const buffer = await response.buffer();
+// async function storeImageInFirebase(openAIImageUrl) {
+//   // Fetch the image from OpenAI's URL
+//   const response = await fetch(openAIImageUrl);
+//   const buffer = await response.buffer();
 
-  // Create a unique filename in a folder "images/"
+//   // Create a unique filename in a folder "images/"
+//   const fileName = `images/${uuidv4()}.png`;
+//   const file = bucket.file(fileName);
+
+//   // Save the file to Firebase Storage
+//   await file.save(buffer, {
+//     metadata: { contentType: "image/png" },
+//   });
+
+//   // Make it publicly readable (optional, but presumably needed for direct URL usage)
+//   await file.makePublic();
+
+//   // Return the public URL
+//   // For publicly readable files, Google Cloud Storage typically uses:
+//   // https://storage.googleapis.com/<bucket-name>/<file-name>
+//   return `https://storage.googleapis.com/${bucketName}/${fileName}`;
+// }
+
+async function storeImageInFirebase(openAIImageUrl) {
+  // 1. Fetch the image buffer (from wherever you're getting it)
+  const response = await fetch(openAIImageUrl);
+  const buffer = await response.arrayBuffer(); // or response.buffer() in Node
+  const uint8Array = new Uint8Array(buffer);
+
+  // 2. Create a unique filename under "images/"
   const fileName = `images/${uuidv4()}.png`;
   const file = bucket.file(fileName);
 
-  // Save the file to Firebase Storage
-  await file.save(buffer, {
-    metadata: { contentType: "image/png" },
+  // 3. Generate a token to allow download
+  const token = uuidv4();
+
+  // 4. Save the file to Firebase Storage, including custom metadata for the token
+  await file.save(uint8Array, {
+    metadata: {
+      contentType: "image/png",
+      metadata: {
+        firebaseStorageDownloadTokens: token,
+      },
+    },
   });
 
-  // Make it publicly readable (optional, but presumably needed for direct URL usage)
-  await file.makePublic();
+  // 5. Construct the Firebase download URL
+  //    Format: https://firebasestorage.googleapis.com/v0/b/<bucketName>/o/<path>?alt=media&token=<token>
+  const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(
+    fileName,
+  )}?alt=media&token=${token}`;
 
-  // Return the public URL
-  // For publicly readable files, Google Cloud Storage typically uses:
-  // https://storage.googleapis.com/<bucket-name>/<file-name>
-  return `https://storage.googleapis.com/${bucketName}/${fileName}`;
+  return downloadUrl;
 }
 
 /**
@@ -113,28 +145,154 @@ async function generateImage(story, category) {
   }
 }
 
+async function generateCoverImage(coverDescription) {
+  try {
+    const prompt = `Create a nostalgic, emotional image of the book that represents this family story: ${coverDescription}.
+   Make it warm, inviting, and suitable for a family memory book.`;
+
+    const response = await openai.images.generate({
+      prompt,
+      n: 1,
+      size: "1024x1024",
+    });
+
+    const openaiImageUrl = response.data[0].url;
+    // Download image from OpenAI and store in Firebase
+    const firebaseImageUrl = await storeImageInFirebase(openaiImageUrl);
+
+    return firebaseImageUrl;
+  } catch (error) {
+    console.error("Error generating image:", error);
+    return null;
+  }
+}
+
+// New helper functions for book creation
+async function generateBookIndex(stories) {
+  const prompt = {
+    role: "system",
+    content: `Create a book index from the following stories. Each story has an initial question and story text. Generate a cohesive structure with chapters and a suggested book title. Format the response as JSON with the following structure:
+    {
+      "title": "Book title",
+      "coverDescription": "Description for cover image generation",
+      "chapters": [
+        {
+          "number": 1,
+          "title": "Chapter title",
+          "storyIndex": 0 // Index of the story in the provided array
+        }
+      ]
+    }
+
+    Stories:
+    ${stories
+      .map(
+        (story, index) => `
+    Story ${index + 1}:
+    Question: ${story.initialQuestion}
+    Text: ${story.storyText}
+    `,
+      )
+      .join("\n")}`,
+  };
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [prompt],
+    response_format: { type: "json_object" },
+  });
+  console.log(completion.choices[0].message.content);
+  return JSON.parse(completion.choices[0].message.content);
+}
+
+async function generateBookChapter(
+  story,
+  chapterTitle,
+  chaptersSoFarSummaries,
+  storyPreferences,
+) {
+  const prompt = {
+    role: "system",
+    content: `We are creating a cohesive book of multiple chapters. 
+So far, these story summaries (NOT full text) have been covered:
+${chaptersSoFarSummaries}
+
+Now, generate the next chapter with the title: "${chapterTitle}" based on this new story:
+Question: ${story.initialQuestion}
+Story Text: ${story.storyText}
+
+Narrative Preferences:
+- Narrative Style: ${storyPreferences.narrativeStyle}
+  • first-person: Stories written from the speaker's perspective ("I remember...")
+  • third-person: Stories written from an observer's perspective ("John remembers...")
+- Length Preference: ${storyPreferences.lengthPreference}
+  • longer: Comprehensive, detailed stories
+  • balanced: Moderate length with key details
+  • shorter: Concise, focused stories
+- Detail Richness: ${storyPreferences.detailRichness}
+  • more: Rich, descriptive narratives with sensory details
+  • balanced: Mix of events and descriptive elements
+  • fewer: Focus on key events and minimal description
+
+IMPORTANT REQUIREMENTS:
+1. Do NOT include any automatic chapter numbering (e.g., "Chapter One," "Chapter Seven").
+2. Do NOT use the word "Chapter" at all.
+3. Write a cohesive, engaging narrative that can logically follow from the previous stories' *summaries*.
+4. Return only the text of the new chapter with no extra headings or metadata.`,
+  };
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [prompt],
+  });
+
+  return completion.choices[0].message.content;
+}
+
 /**
  * Calls GPT (chat model) to update the story summary, text, etc.
  */
 async function updateStoryWithGPT(story, category, transcript) {
+  const userDoc = await db.collection("users").doc(story.userId).get();
+  const userData = userDoc.data();
+  const storyPreferences = userData?.storyPreferences || {
+    narrativeStyle: "first-person",
+    lengthPreference: "balanced",
+    detailRichness: "balanced",
+  };
   const prompt = {
     role: "system",
     content: `You are an AI assistant helping to analyze and summarize conversations about family stories and memories.
 
-Category Context: ${category.title} - ${category.description}
-Initial Question: ${story.initialQuestion}
-Previous Summary: ${story.storySummary || "No previous summary"}
+  Category Context: ${category.title} - ${category.description}
+  Initial Question: ${story.initialQuestion}
+  Previous Summary: ${story.storySummary || "No previous summary"}
 
-Based on the transcript of the conversation, generate a JSON response with the following fields:
-- storySummary: A concise summary of all conversations so far
-- storyText: A well-formatted narrative combining all the stories shared
-- title: A one-line title (only if current title is null)
-- description: A 40-50 word description (only if current description is null)
+  Narrative Preferences:
+  - Narrative Style: ${storyPreferences.narrativeStyle}
+    • first-person: Stories written from the speaker's perspective ("I remember...")
+    • third-person: Stories written from ${userData.name}'s perspective ("${userData.name} remembers...")
+  - Length Preference: ${storyPreferences.lengthPreference}
+    • longer: Comprehensive, detailed stories
+    • balanced: Moderate length with key details
+    • shorter: Concise, focused stories
+  - Detail Richness: ${storyPreferences.detailRichness}
+    • more: Rich, descriptive narratives with sensory details
+    • balanced: Mix of events and descriptive elements
+    • fewer: Focus on key events and minimal description
 
-Current Transcript:
-${transcript}`,
+  Based on the transcript of the conversation and the narrative preferences above, generate a JSON response with the following fields:
+
+  - storySummary: A concise summary of all conversations so far
+  - storyText: A well-formatted narrative combining all the stories shared, following the specified narrative style, length, and detail richness
+  - title: A one-line title (only if current title is null)
+  - description: A 40-50 word description (only if current description is null)
+
+  Current Transcript:
+  ${transcript}`,
   };
 
+  console.log(prompt);
   // Update this to your actual GPT model name (e.g., "gpt-3.5-turbo", "gpt-4", or "gpt-4o" if you have a custom route).
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
@@ -307,6 +465,121 @@ fastify.post("/webhook/retell", async (request, reply) => {
   } catch (error) {
     request.log.error(error);
     reply.code(400).send({ error: "Failed to process webhook" });
+  }
+});
+
+fastify.post("/create-book", async (request, reply) => {
+  let bookRef;
+
+  try {
+    const { user_id } = request.query;
+    if (!user_id) {
+      reply.code(400).send({ error: "user_id is required" });
+      return;
+    }
+
+    const userDoc = await db.collection("users").doc(user_id).get();
+    const userData = userDoc.data();
+    const storyPreferences = userData?.storyPreferences || {
+      narrativeStyle: "first-person",
+      lengthPreference: "balanced",
+      detailRichness: "balanced",
+    };
+
+    // 1. Create a new book document (with in-progress status).
+    bookRef = db.collection("users").doc(user_id).collection("books").doc();
+    await bookRef.set({
+      status: "in-progress",
+      createdAt: new Date(),
+    });
+
+    // 2. Fetch all stories for this user.
+    const storiesSnapshot = await db
+      .collection("stories")
+      .where("userId", "==", user_id)
+      .get();
+
+    const stories = storiesSnapshot.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    if (stories.length === 0) {
+      await bookRef.update({ status: "error", error: "No stories found" });
+      reply.code(404).send({ error: "No stories found for this user" });
+      return;
+    }
+
+    // 3. Generate the "index" (chapters array + suggested book title).
+    const bookIndex = await generateBookIndex(stories);
+
+    // 4. Generate a cover image (optional).
+    const coverImageUrl = await generateCoverImage(bookIndex.coverDescription);
+
+    // 5. Build final chapters array with continuity from story summaries
+    const chapters = [];
+    let chaptersSoFarSummaries = "";
+    // We'll accumulate the story summaries from each prior story
+    // so the next chapter knows the gist of what's happened.
+
+    for (let i = 0; i < bookIndex.chapters.length; i++) {
+      const chapter = bookIndex.chapters[i];
+      // Identify the correct story from the array
+      const story = stories[chapter.storyIndex];
+
+      // Use only the summaries so far for context, not entire text
+      const chapterContent = await generateBookChapter(
+        story,
+        chapter.title,
+        chaptersSoFarSummaries,
+        storyPreferences,
+      );
+
+      // Push the newly generated chapter
+      chapters.push({
+        order: i + 1,
+        title: chapter.title,
+        storyId: story.id,
+        story: chapterContent,
+        imageUrl: story.imageUrl ?? null,
+      });
+
+      // Append the new story's summary for the next iteration.
+      // (Assumes each "story" doc in Firestore has a "storySummary" field.)
+      if (story.storySummary) {
+        chaptersSoFarSummaries += `\n\nTitle: ${chapter.title}\nSummary: ${story.storySummary}`;
+      } else {
+        // fallback, if no "storySummary" in doc
+        chaptersSoFarSummaries += `\n\nTitle: ${chapter.title}\nSummary: (No summary available)`;
+      }
+    }
+
+    // 6. Update the book doc with final results
+    await bookRef.update({
+      status: "completed",
+      title: bookIndex.title,
+      imageUrl: coverImageUrl,
+      chapters,
+      updatedAt: new Date(),
+    });
+
+    reply.send({
+      status: "success",
+      bookId: bookRef.id,
+      title: bookIndex.title,
+      chaptersCount: chapters.length,
+    });
+  } catch (error) {
+    console.error("Error creating book:", error);
+    if (bookRef) {
+      await bookRef.update({
+        status: "error",
+        error: error.message,
+      });
+    }
+    reply
+      .code(500)
+      .send({ error: "Failed to create book", details: error.message });
   }
 });
 
