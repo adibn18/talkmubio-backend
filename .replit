@@ -1,4 +1,4 @@
-entrypoint = "index.js"
+entrypoint = "src/index.js"
 modules = ["nodejs-20"]
 hidden = [".config", "package-lock.json"]
 
@@ -12,6 +12,11 @@ channel = "stable-24_05"
 language = "nodejs"
 
 [deployment]
-run = ["node", "index.js"]
-deploymentTarget = "cloudrun"
+run = ["node", "src/index.js"]
+deploymentTarget = "gce"
 ignorePorts = false
+
+[[ports]]
+localPort = 3000
+externalPort = 80
+exposeLocalhost = true
