@@ -26,13 +26,16 @@ async function handleRetellWebhook(call) {
 
       for (const [sessionId, session] of Object.entries(sessions)) {
         if (session.callId === call_id) {
-          const categoryDoc = await db
+          let categoryDoc = await db
             .collection("categories")
             .doc(story.categoryId)
             .get();
-          if (!categoryDoc.exists) {
-            throw new Error(`Category ${story.categoryId} not found`);
-          }
+          // if (!categoryDoc.exists) {
+          //   categoryDoc = {
+          //     title: "Onborading Call",
+          //     description: "Get to know the user",
+          //   };
+          // }
 
           const cleanedTranscriptObject = transcript_object.map((msg) => ({
             role: msg.role,
@@ -57,7 +60,10 @@ async function handleRetellWebhook(call) {
           if (!session.updated) {
             const gptUpdates = await updateStoryWithGPT(
               story,
-              categoryDoc.data(),
+              categoryDoc?.data() ?? {
+                title: "Onborading Call",
+                description: "Get to know the user",
+              },
               transcript,
             );
 

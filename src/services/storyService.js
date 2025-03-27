@@ -5,18 +5,25 @@ import { generateImage } from "./imageService.js";
 export async function updateStoryWithGPT(story, category, transcript) {
   const userDoc = await db.collection("users").doc(story.userId).get();
   const userData = userDoc.data();
+  const onboardingStoryDoc = await db
+    .collection("stories")
+    .doc(userData.onboardingStoryId)
+    .get();
+  const onboardingStoryData = onboardingStoryDoc.data();
   const storyPreferences = userData?.storyPreferences || {
     narrativeStyle: "first-person",
     lengthPreference: "balanced",
     detailRichness: "balanced",
   };
 
+  const onboardingStorySummary = onboardingStoryData.storySummary;
   const prompt = {
     role: "system",
     content: `You are an AI assistant helping to analyze and summarize conversations about family stories and memories.
 
   Category Context: ${category.title} - ${category.description}
   Initial Question: ${story.initialQuestion}
+  Onboarding Call Summary: ${onboardingStorySummary}
   Previous Summary: ${story.storySummary || "No previous summary"}
 
   Narrative Preferences:

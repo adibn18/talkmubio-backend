@@ -5,13 +5,26 @@ import { getAgentId } from "../services/storyService.js";
 export function setupCallRoutes(fastify) {
   fastify.post("/create-web-call", async (request, reply) => {
     try {
-      const { userId, categoryId, question, existingStoryId } = request.body;
-
-      if (!userId || !categoryId || !question) {
+      let {
+        userId,
+        categoryId,
+        question,
+        existingStoryId,
+        isOnboarding,
+        agentId,
+      } = request.body;
+      console.log("Received Web Call request:", request.body);
+      if (
+        !(userId && categoryId && question) &&
+        !(userId && isOnboarding && agentId)
+      ) {
         return reply.code(400).send({ error: "Missing required parameters" });
       }
 
-      const agentId = await getAgentId(userId, categoryId);
+      agentId = !agentId ? await getAgentId(userId, categoryId) : agentId;
+      isOnboarding = !isOnboarding ? false : isOnboarding;
+      categoryId = !categoryId ? "0" : categoryId;
+      question = !question ? "Onboarding Call" : question;
 
       let summary =
         "This is the first conversation and there is no previous context.";
@@ -26,10 +39,22 @@ export function setupCallRoutes(fastify) {
         }
       }
 
+      const userDoc = await db.collection("users").doc(userId).get();
+      const userData = userDoc.data();
+      let onboardingStoryData = "";
+      if (!isOnboarding) {
+        const onboardingStoryDoc = await db
+          .collection("stories")
+          .doc(userData.onboardingStoryId)
+          .get();
+        onboardingStoryData = onboardingStoryDoc.data();
+      }
+
       const createCallResponse = await retellClient.call.createWebCall({
         agent_id: agentId,
         retell_llm_dynamic_variables: {
           initial_question: question,
+          onboardingData: onboardingStoryData.storySummary,
           summary: summary,
         },
       });
@@ -51,6 +76,7 @@ export function setupCallRoutes(fastify) {
           creationTime: new Date(),
           lastUpdationTime: new Date(),
           initialQuestion: question,
+          isOnboardingStory: isOnboarding,
           sessions: {},
           storySummary: null,
         });
