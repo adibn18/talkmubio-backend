@@ -49,7 +49,7 @@ export async function updateStoryWithGPT(story, category, transcript) {
   Current Transcript:
   ${transcript}`,
   };
-
+  console.log(prompt);
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [prompt],
@@ -57,7 +57,7 @@ export async function updateStoryWithGPT(story, category, transcript) {
   });
 
   const response = JSON.parse(completion.choices[0].message.content);
-
+  console.log(response);
   const updateData = {
     storySummary: response.storySummary,
     storyText: response.storyText,

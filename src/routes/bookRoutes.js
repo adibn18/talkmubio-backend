@@ -33,6 +33,7 @@ export function setupBookRoutes(fastify) {
       const storiesSnapshot = await db
         .collection("stories")
         .where("userId", "==", user_id)
+        .where("isOnboardingStory", "in", [false, null])
         .get();
 
       const stories = storiesSnapshot.docs.map((doc) => ({

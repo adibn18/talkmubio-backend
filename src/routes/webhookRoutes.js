@@ -50,11 +50,12 @@ async function handleRetellWebhook(call) {
             }),
           }));
 
-          sessions[sessionId] = {
-            ...session,
-            transcript,
-            transcript_object: cleanedTranscriptObject,
-            recording_url,
+          const updates = {
+            [`sessions.${sessionId}.transcript`]: transcript,
+            [`sessions.${sessionId}.transcript_object`]:
+              cleanedTranscriptObject,
+            [`sessions.${sessionId}.recording_url`]: recording_url,
+            [`sessions.${sessionId}.lastUpdatedAt`]: new Date(),
           };
 
           if (!session.updated) {
@@ -67,23 +68,12 @@ async function handleRetellWebhook(call) {
               transcript,
             );
 
-            await storyDoc.ref.update({
-              sessions: {
-                ...sessions,
-                [sessionId]: {
-                  ...sessions[sessionId],
-                  updated: true,
-                },
-              },
-              ...gptUpdates,
-              lastUpdationTime: new Date(),
-            });
-          } else {
-            await storyDoc.ref.update({
-              sessions,
-              lastUpdationTime: new Date(),
+            Object.assign(updates, gptUpdates, {
+              [`sessions.${sessionId}.updated`]: true,
             });
           }
+
+          await storyDoc.ref.update(updates);
 
           return true;
         }
