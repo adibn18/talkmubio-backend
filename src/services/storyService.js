@@ -49,7 +49,6 @@ export async function updateStoryWithGPT(story, category, transcript) {
   Current Transcript:
   ${transcript}`,
   };
-  console.log(prompt);
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [prompt],
@@ -57,7 +56,6 @@ export async function updateStoryWithGPT(story, category, transcript) {
   });
 
   const response = JSON.parse(completion.choices[0].message.content);
-  console.log(response);
   const updateData = {
     storySummary: response.storySummary,
     storyText: response.storyText,
@@ -99,4 +97,211 @@ export async function getAgentId(userId, categoryId) {
     console.error("Error getting agent ID:", error);
     throw error;
   }
+}
+
+async function deleteUpcomingQuestionsForUser(userId) {
+  console.log(`Deleting all upcoming questions for user: ${userId}`);
+
+  const upcomingQuestionsRef = db.collection("upcoming_questions");
+  const querySnapshot = await upcomingQuestionsRef
+    .where("userId", "==", userId)
+    .get();
+
+  if (querySnapshot.empty) {
+    console.log("No upcoming questions found for this user.");
+    return;
+  }
+
+  const batch = db.batch();
+  querySnapshot.docs.forEach((doc) => {
+    batch.delete(doc.ref);
+  });
+
+  await batch.commit();
+  console.log(
+    `Successfully deleted ${querySnapshot.size} upcoming questions for user: ${userId}`,
+  );
+}
+
+export async function generateUpcomingQuestions(userId) {
+  deleteUpcomingQuestionsForUser(userId);
+
+  console.log("Updating upcoming questions for user: ", userId);
+
+  const storiesRef = db.collection("stories");
+  const categoriesRef = db.collection("categories");
+
+  // Fetch all stories for this user
+  const storiesSnapshot = await storiesRef.where("userId", "==", userId).get();
+
+  // Filter out stories with categoryId === "0"
+  const filteredStories = storiesSnapshot.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((story) => story.categoryId && story.categoryId !== "0");
+
+  // Sort by lastUpdatedAt (most recent first)
+  const sortedStories = filteredStories
+    .sort((a, b) => {
+      const bTime = new Date(
+        b.sessions?.[
+          Object.keys(b.sessions).pop()
+        ]?.lastUpdatedAt?.toDate?.() || 0,
+      );
+      const aTime = new Date(
+        a.sessions?.[
+          Object.keys(a.sessions).pop()
+        ]?.lastUpdatedAt?.toDate?.() || 0,
+      );
+      return bTime - aTime;
+    })
+    .slice(0, 5);
+
+
+  const recentSummaries = sortedStories.map((s) => ({
+    storyId: s.id,
+    categoryId: s.categoryId,
+    storySummary: s.storySummary || "",
+    initialQuestion: s.initialQuestion || "",
+  }));
+
+  const categoriesSnapshot = await categoriesRef.get();
+  const categories = {};
+  categoriesSnapshot.docs.forEach((doc) => {
+    const data = doc.data();
+    categories[doc.id] = {
+      title: data.title,
+      description: data.description,
+    };
+  });
+
+  const prompt = {
+    role: "system",
+    content: `You are an AI that suggests new conversation questions based on recent personal stories and their themes. Each story is linked to a category.
+
+For each story, you will receive:
+- The story summary
+- The category title and description
+- The initial question that led to the story
+
+Use this to understand the user's interests and tone of questions they respond to. Then suggest up to 10 new follow-up questions, each linked to the most relevant categoryId.
+
+Return a JSON object with a single field "questions" containing an array of:
+[
+  {
+    "categoryId": "abc123",
+    "question": "What was a moment from your school years that shaped you?"
+  }
+]
+
+Recent Story Context:
+${recentSummaries
+  .map(
+    (s, idx) =>
+      `${idx + 1}. [${categories[s.categoryId]?.title || "Unknown Category"}]\n` +
+      `Initial Question: ${s.initialQuestion || "N/A"}\n` +
+      `Story Summary: ${s.storySummary || "No summary available."}`,
+  )
+  .join("\n\n")}
+
+Category Descriptions:
+${Object.entries(categories)
+  .map(([id, cat]) => `- ${cat.title} (${id}): ${cat.description}`)
+  .join("\n")}
+`,
+  };
+
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [prompt],
+    response_format: { type: "json_object" }, // Correct usage
+  });
+  console.log("Completion: ", completion);
+  const questionsResponse = JSON.parse(completion.choices[0].message.content);
+  const suggestions = questionsResponse.questions || [];
+
+
+  const upcomingQuestionsRef = db.collection("upcoming_questions");
+  const createdAt = new Date();
+
+  const batch = db.batch();
+  suggestions.forEach(({ categoryId, question }) => {
+    const docRef = upcomingQuestionsRef.doc();
+    batch.set(docRef, {
+      id: docRef.id,
+      userId,
+      categoryId,
+      categoryTitle: categories[categoryId]?.title || "Unknown",
+      question,
+      createdAt,
+    });
+  });
+
+  await batch.commit();
+  console.log(`Successfully saved ${suggestions.length} upcoming questions.`);
+}
+
+// Delay function
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Wait until videoComplete is true
+export async function waitForVideoCompletionAndLogHistory(
+  userId,
+  storyRef,
+  sessionId,
+  callId,
+) {
+  const MAX_ATTEMPTS = 10;
+  const DELAY_MS = 1500; // 3 seconds between checks
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const storySnapshot = await storyRef.get();
+    const storyData = storySnapshot.data();
+    const session = storyData.sessions?.[sessionId];
+
+    if (session?.videoComplete) {
+      const categoryDoc = await db
+        .collection("categories")
+        .doc(storyData.categoryId)
+        .get();
+
+      const callHistoryRef = db
+        .collection("users")
+        .doc(userId)
+        .collection("call_history")
+        .doc(callId);
+
+      await callHistoryRef.set({
+        storyId: storySnapshot.id,
+        sessionId,
+        callId,
+        creationTime: session.creationTime ?? new Date(),
+        lastUpdated: new Date(),
+        transcript: session.transcript ?? "",
+        transcript_object: session.transcript_object ?? [],
+        recording_url: session.recording_url ?? null,
+        videoUrl: session.videoUrl ?? null,
+        updated: session.updated ?? false,
+        videoComplete: true,
+        summary: storyData.storySummary ?? null,
+        category: categoryDoc?.data()?.title ?? null,
+        initialQuestion: storyData.initialQuestion ?? null,
+        title: storyData.title ?? null,
+      });
+
+      console.log(`Call history saved for ${callId}`);
+      return;
+    }
+
+    console.log(
+      `Waiting for videoComplete... [Attempt ${attempt}/${MAX_ATTEMPTS}]`,
+    );
+    await delay(DELAY_MS);
+  }
+
+  console.warn(
+    `Timed out waiting for videoComplete on call ${callId}. Call history not saved.`,
+  );
 }

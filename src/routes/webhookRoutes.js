@@ -1,5 +1,9 @@
 import { db } from "../config/firebase.js";
-import { updateStoryWithGPT } from "../services/storyService.js";
+import {
+  updateStoryWithGPT,
+  generateUpcomingQuestions,
+  waitForVideoCompletionAndLogHistory,
+} from "../services/storyService.js";
 
 // Create a global in-memory map to track processed call IDs
 const callProcessedMap = new Map();
@@ -74,7 +78,13 @@ async function handleRetellWebhook(call) {
           }
 
           await storyDoc.ref.update(updates);
-
+          waitForVideoCompletionAndLogHistory(
+            story.userId,
+            storyDoc.ref,
+            sessionId,
+            call_id,
+          );
+          generateUpcomingQuestions(story.userId);
           return true;
         }
       }
