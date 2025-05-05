@@ -53,6 +53,10 @@ export function setupCallRoutes(fastify) {
       const createCallResponse = await retellClient.call.createWebCall({
         agent_id: agentId,
         retell_llm_dynamic_variables: {
+          conversationStyle:
+            userData?.aiPreferences?.conversationStyle || "balanced",
+          followUpIntensity:
+            userData?.aiPreferences?.followUpIntensity || "balanced",
           initial_question: question,
           onboardingData: onboardingStoryData.storySummary,
           summary: summary,

@@ -67,7 +67,7 @@ async function handleRetellWebhook(call) {
               story,
               categoryDoc?.data() ?? {
                 title: "Onborading Call",
-                description: "Get to know the user",
+                description: "Get to know the user and extract ALL DETAILS from conversation",
               },
               transcript,
             );
