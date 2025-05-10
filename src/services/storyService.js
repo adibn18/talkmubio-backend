@@ -3,20 +3,34 @@ import { openai } from "../config/openai.js";
 import { generateImage } from "./imageService.js";
 
 export async function updateStoryWithGPT(story, category, transcript) {
+  if (!story?.userId) {
+    throw new Error("updateStoryWithGPT: story.userId is missing");
+  }
   const userDoc = await db.collection("users").doc(story.userId).get();
   const userData = userDoc.data();
-  const onboardingStoryDoc = await db
-    .collection("stories")
-    .doc(userData.onboardingStoryId)
-    .get();
-  const onboardingStoryData = onboardingStoryDoc.data();
+  // const onboardingStoryDoc = await db
+  //   .collection("stories")
+  //   .doc(userData.onboardingStoryId)
+  //   .get();
+  // const onboardingStoryData = onboardingStoryDoc.data();
   const storyPreferences = userData?.storyPreferences || {
     narrativeStyle: "first-person",
     lengthPreference: "balanced",
     detailRichness: "balanced",
   };
 
-  const onboardingStorySummary = onboardingStoryData.storySummary;
+  // storyService.js
+  let onboardingStorySummary = "";
+  if (userData?.onboardingStoryId) {
+    const onboardingSnap = await db
+      .collection("stories")
+      .doc(userData.onboardingStoryId)
+      .get();
+
+    if (onboardingSnap.exists) {
+      onboardingStorySummary = onboardingSnap.data().storySummary || "";
+    }
+  }
   const prompt = {
     role: "system",
     content: `You are an AI assistant helping to analyze and summarize conversations about family stories and memories.
@@ -253,7 +267,7 @@ export async function waitForVideoCompletionAndLogHistory(
   sessionId,
   callId,
 ) {
-  const MAX_ATTEMPTS = 10;
+  const MAX_ATTEMPTS = 999;
   const DELAY_MS = 1500; // 3 seconds between checks
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
