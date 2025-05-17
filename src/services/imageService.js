@@ -31,22 +31,45 @@ async function storeImageInFirebase(openAIImageUrl) {
 
 export async function generateImage(story, category) {
   try {
-    const prompt = `Create a nostalgic, emotional image that represents this family story: ${story.storySummary}.
-    Category: ${category.title}. Make it warm, inviting, and suitable for a family memory book.`;
+    const prompt = `Create a high-quality, nostalgic image that visually represents this family story:
+    
+    **Story Summary:** ${story.storySummary}
+    
+    **Category:** ${category.title}
+    
+    **Style Guidelines:**
+    - Warm, emotional, and inviting atmosphere
+    - Suitable for a family memory book
+    - Photorealistic or high-quality illustration style
+    - Soft lighting and warm color tones
+    - Include subtle nostalgic elements
+    - Focus on emotional connection rather than literal representation
+    
+    Avoid clichés and create a unique, meaningful image that captures the essence of the story.`;
 
     const response = await openai.images.generate({
+      model: "dall-e-3",
       prompt,
       n: 1,
       size: "1024x1024",
+      quality: "hd",
+      style: "vivid",
     });
 
+    if (!response.data || !response.data[0]?.url) {
+      throw new Error("No image URL returned from OpenAI");
+    }
     const openaiImageUrl = response.data[0].url;
-    return await storeImageInFirebase(openaiImageUrl);
+    const firebaseImageUrl = await storeImageInFirebase(openaiImageUrl);
+    await addImageGenerationMetadata(story.id, prompt, firebaseImageUrl);
+    
+    return firebaseImageUrl;
   } catch (error) {
     console.error("Error generating image:", error);
     return null;
   }
 }
+
 
 export async function generateCoverImage(coverDescription) {
   try {
