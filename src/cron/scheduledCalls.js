@@ -63,6 +63,7 @@ async function processScheduledCalls() {
               creationTime: new Date(),
               recording_url: null,
               updated: false,
+              videoComplete : true,
             },
             nextSchedule: null,
             lastUpdationTime: new Date(),
