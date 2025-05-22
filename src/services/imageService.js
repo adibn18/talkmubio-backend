@@ -61,7 +61,7 @@ export async function generateImage(story, category) {
     }
     const openaiImageUrl = response.data[0].url;
     const firebaseImageUrl = await storeImageInFirebase(openaiImageUrl);
-    await addImageGenerationMetadata(story.id, prompt, firebaseImageUrl);
+    //await addImageGenerationMetadata(story.id, prompt, firebaseImageUrl);
     
     return firebaseImageUrl;
   } catch (error) {
